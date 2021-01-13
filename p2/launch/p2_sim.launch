@@ -1,0 +1,15 @@
+<launch>
+	<arg name="rviz" default="true"/>
+	<arg name="gui" default="false"/>
+	<include file="$(find uebung)/launch/sim.launch">
+		<arg name="gui" value="$(arg gui)"/>
+		<arg name="rviz" value="$(arg rviz)"/>
+	</include>
+	<node pkg="p2" type="marker_publisher.py" name="marker_publisher"/>
+
+	<include file="$(find prbt_moveit_config)/launch/warehouse.launch">
+		<arg name="moveit_warehouse_database_path" value="~/warehouse"/>
+	</include>
+
+	<node pkg="moveit_ros_warehouse" type="moveit_warehouse_services" name="warehouse_services"/>
+</launch>
