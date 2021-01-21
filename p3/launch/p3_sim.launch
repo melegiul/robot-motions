@@ -1,0 +1,22 @@
+<launch>
+	<arg name="rviz" default="true"/>
+	<arg name="gazebo" default="true"/>
+	<arg name="gui" default="true"/>
+
+	<include file="$(find p3)/launch/sim.launch">
+		<arg name="gazebo" value="$(arg gazebo)"/>
+		<arg name="gui" value="$(arg gui)"/>
+		<arg name="rviz" value="$(arg rviz)"/>
+		<arg name="world_name" value="$(find p3)/worlds/cubes.world"/> 
+	</include>
+	<include file="$(find prbt_moveit_config)/launch/warehouse.launch">
+		<arg name="moveit_warehouse_database_path" value="~/warehouse"/>
+	</include>
+
+	<node pkg="moveit_ros_warehouse" type="moveit_warehouse_services" name="warehouse_services"/>
+
+	<node pkg="tf" type="static_transform_publisher" name="cube_static_publisher" args="-0.5 0 0 3.141 0 0 /world /first_cube 10"/>
+	<node pkg="tf" type="static_transform_publisher" name="A_static_publisher" args="0.2 0.3 0 0.5 0 0 /world /A 10"/>
+	<node pkg="tf" type="static_transform_publisher" name="B_static_publisher" args="0.25 0.1 0 -0.5 0 0 /world /B 10"/>
+	<node pkg="tf" type="static_transform_publisher" name="C_static_publisher" args="0.25 -0.3 0 0 0 0 /world /C 10"/>
+</launch>
