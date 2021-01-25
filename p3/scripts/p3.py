@@ -16,9 +16,9 @@ WORLD_FRAME = "/world"
 FIRST_CUBE_FRAME = "/first_cube"
 
 #Das Programm sollte mit allen Belegungen der beiden untenstehenden Variablen funktionieren!
-ROW_FRAME = "/A"
+# ROW_FRAME = "/A"
 # ROW_FRAME = "/B"
-# ROW_FRAME = "/C"
+ROW_FRAME = "/C"
 #Laenge der Wuerfel-Reihe, 0-6
 N_CUBES = 6
 
@@ -30,9 +30,12 @@ START_CUBE_DISTANCE = 0.1
 CUBE_COL_NUM = 3
 CUBE_ROW_NUM = 2
 OFFSET = 0
-VELOCITY = 0.3
-ACCELERATION = 0.3
+LIN_VELOCITY = 0.3
+LIN_ACCELERATION = 0.3
+PTP_VELOCITY = 0.7
+PTP_ACCELERATION = 0.4
 ANGLE_STRETCH = 1.5
+BLEND_RADIUS = 0.05
 
 class CubeRow:
     def __init__(self, robot):
@@ -81,8 +84,8 @@ class CubeRow:
             robot.move(
                 Ptp(
                     goal=HOME_POSITION,
-                    vel_scale=VELOCITY,
-                    acc_scale=ACCELERATION
+                    vel_scale=PTP_VELOCITY,
+                    acc_scale=PTP_ACCELERATION
                 )
             )
         except RobotMoveFailed as e:
@@ -99,6 +102,23 @@ class CubeRow:
         for cube_id in range(N_CUBES - OFFSET):
             cube_pose = self.get_cube_pose(cube_id)
             target_pose = self.get_target_pose(cube_id)
+            euler1 = tf.transformations.euler_from_quaternion(
+                [
+                    target_pose.orientation.x,
+                    target_pose.orientation.y,
+                    target_pose.orientation.z,
+                    target_pose.orientation.w,
+                ]
+            )
+            euler2 = tf.transformations.euler_from_quaternion(
+                [
+                    cube_pose.orientation.x,
+                    cube_pose.orientation.y,
+                    cube_pose.orientation.z,
+                    cube_pose.orientation.w,
+                ]
+            )
+            # import pdb; pdb.set_trace()
             cubes_targets_pairs.append((cube_pose, target_pose))
         return cubes_targets_pairs
 
@@ -117,8 +137,8 @@ class CubeRow:
         """
         cube_pose = Pose(
             position=Point(
-                -self.first_cube_pose.position.x - (cube_id / CUBE_COL_NUM * START_CUBE_DISTANCE),
-                -self.first_cube_pose.position.y + (cube_id % CUBE_COL_NUM * START_CUBE_DISTANCE),
+                self.first_cube_pose.position.x + (cube_id / CUBE_COL_NUM * START_CUBE_DISTANCE),
+                self.first_cube_pose.position.y + (cube_id % CUBE_COL_NUM * START_CUBE_DISTANCE),
                 self.first_cube_pose.position.z
             )
         )
@@ -158,30 +178,20 @@ class CubeRow:
             geometry_msgs.msg.Pose: Pose of specified cube
         """
         # set row orientation orthogonal to line between row-origin and world-origin
-        row_angle = math.atan(-self.row_pose.position.y / -self.row_pose.position.x)
+        row_angle = math.atan(self.row_pose.position.y / self.row_pose.position.x)
         row_angle *= ANGLE_STRETCH
-        if -self.row_pose.position.x < 0 and -self.row_pose.position.y < 0:
-            # third quadrant propagation rule
-            x_sign = 1 
-            y_sign = -1 
-        elif -self.row_pose.position.x < 0 and -self.row_pose.position.y > 0:
-            # second quadrant propagation rule
-            x_sign = -1 
-            y_sign = 1
-        else:
-            #TODO other quadrants if necessary
-            pass
+        row_direction = self.get_row_direction()
         target_pose = Pose(
             # x_sign, y_sign control the rows direction
             position=Point(
-                -self.row_pose.position.x + x_sign * (cube_id * TARGET_CUBE_DISTANCE * math.sin(row_angle)),
-                -self.row_pose.position.y + y_sign * (cube_id * TARGET_CUBE_DISTANCE * math.cos(row_angle)),
+                self.row_pose.position.x + row_direction['x'] * (cube_id * TARGET_CUBE_DISTANCE * math.sin(row_angle)),
+                self.row_pose.position.y + row_direction['y'] * (cube_id * TARGET_CUBE_DISTANCE * math.cos(row_angle)),
                 self.row_pose.position.z
             )
         )
         pose_orientation = from_euler(0, 0, row_angle)
         # turn around z-axis
-        q = tf.transformations.quaternion_multiply(
+        p = tf.transformations.quaternion_multiply(
             [
                 pose_orientation.x,
                 pose_orientation.y,
@@ -195,11 +205,42 @@ class CubeRow:
                 UPSIDE_DOWN.w
             ]
         )
-        target_pose.orientation.x = q[0]
-        target_pose.orientation.y = q[1]
-        target_pose.orientation.z = q[2]
-        target_pose.orientation.w = q[3]
+        switch = from_euler(math.radians(180), 0, 0)
+        p = tf.transformations.quaternion_multiply(
+            [
+                p[0],
+                p[1],
+                p[2],
+                p[3]
+            ],
+            [
+                switch.x,
+                switch.y,
+                switch.z,
+                switch.w
+            ]
+        )
+        target_pose.orientation.x = p[0]
+        target_pose.orientation.y = p[1]
+        target_pose.orientation.z = p[2]
+        target_pose.orientation.w = p[3]
         return target_pose
+
+
+    def get_row_direction(self):
+        if self.row_pose.position.x < 0 and self.row_pose.position.y < 0:
+            # third quadrant propagation rule
+            x_sign = 1 
+            y_sign = -1 
+        elif self.row_pose.position.x < 0 and self.row_pose.position.y > 0:
+            # second quadrant propagation rule
+            x_sign = -1 
+            y_sign = 1
+        else:
+            #TODO other quadrants if necessary
+            pass
+        return {'x': x_sign, 'y': y_sign}
+
 
 
     def get_cube(self, robot, pick_pose):
@@ -210,30 +251,32 @@ class CubeRow:
         #Zuerst: PTP zu Position direkt ueber den Wuerfel
         try:
             sequence = Sequence()
-            robot.move(
+            sequence.append(
                 Ptp(
                     goal=Pose
                     (
                         position=approach_point,
                         orientation=pick_pose.orientation
                     ),
-                    vel_scale=VELOCITY,
-                    acc_scale=ACCELERATION,
+                    vel_scale=PTP_VELOCITY,
+                    acc_scale=PTP_ACCELERATION,
                 ),
+                blend_radius=BLEND_RADIUS
             )
             # Greifer oeffnen
-            self.gripper.open()
+            # self.gripper.open()
             #LIN zum Wuerfel
-            robot.move(
+            sequence.append(
                 Lin(
                     goal=Pose(
                         position=grasp_point,
                         orientation=pick_pose.orientation
                     ),
-                    vel_scale=VELOCITY,
-                    acc_scale=ACCELERATION,
+                    vel_scale=LIN_VELOCITY,
+                    acc_scale=LIN_ACCELERATION,
                 )
             )
+            robot.move(sequence)
             #Greifer schliessen
             self.gripper.close()
             #mit LIN gerade nach oben anheben
@@ -243,8 +286,8 @@ class CubeRow:
                         position=approach_point,
                         orientation=pick_pose.orientation
                     ),
-                    vel_scale=VELOCITY,
-                    acc_scale=ACCELERATION,
+                    vel_scale=LIN_VELOCITY,
+                    acc_scale=LIN_ACCELERATION,
                 )
             )
         except RobotMoveFailed as e:
@@ -263,10 +306,10 @@ class CubeRow:
                         position=approach_point,
                         orientation=target_pose.orientation
                     ),
-                    vel_scale=VELOCITY,
-                    acc_scale=ACCELERATION,
+                    vel_scale=PTP_VELOCITY,
+                    acc_scale=PTP_ACCELERATION,
                 ),
-                blend_radius=0.05
+                blend_radius=BLEND_RADIUS
             )
             #LIN Gerade nach unten
             sequence.append(
@@ -275,8 +318,8 @@ class CubeRow:
                         position=place_point,
                         orientation=target_pose.orientation
                     ),
-                    vel_scale=VELOCITY,
-                    acc_scale=ACCELERATION,
+                    vel_scale=LIN_VELOCITY,
+                    acc_scale=LIN_ACCELERATION,
                 )
             )
             #Ausfuehren der Sequenz
@@ -291,8 +334,8 @@ class CubeRow:
                         position=approach_point,
                         orientation=target_pose.orientation
                     ),
-                    vel_scale=VELOCITY,
-                    acc_scale=ACCELERATION,
+                    vel_scale=LIN_VELOCITY,
+                    acc_scale=LIN_ACCELERATION,
                 )
             )
         except RobotMoveFailed as e:
@@ -300,6 +343,7 @@ class CubeRow:
 
     def main(self):
         cubes_targets_pairs = self.get_cubes_targets_pairs()
+        self.gripper.open()
         for n in range(N_CUBES-OFFSET):
             # place cubes at targets
             self.get_cube(robot, cubes_targets_pairs[n][0])
