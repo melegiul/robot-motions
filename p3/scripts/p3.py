@@ -17,8 +17,8 @@ FIRST_CUBE_FRAME = "/first_cube"
 
 #Das Programm sollte mit allen Belegungen der beiden untenstehenden Variablen funktionieren!
 # ROW_FRAME = "/A"
-# ROW_FRAME = "/B"
-ROW_FRAME = "/C"
+ROW_FRAME = "/B"
+# ROW_FRAME = "/C"
 #Laenge der Wuerfel-Reihe, 0-6
 N_CUBES = 6
 
@@ -102,23 +102,6 @@ class CubeRow:
         for cube_id in range(N_CUBES - OFFSET):
             cube_pose = self.get_cube_pose(cube_id)
             target_pose = self.get_target_pose(cube_id)
-            euler1 = tf.transformations.euler_from_quaternion(
-                [
-                    target_pose.orientation.x,
-                    target_pose.orientation.y,
-                    target_pose.orientation.z,
-                    target_pose.orientation.w,
-                ]
-            )
-            euler2 = tf.transformations.euler_from_quaternion(
-                [
-                    cube_pose.orientation.x,
-                    cube_pose.orientation.y,
-                    cube_pose.orientation.z,
-                    cube_pose.orientation.w,
-                ]
-            )
-            # import pdb; pdb.set_trace()
             cubes_targets_pairs.append((cube_pose, target_pose))
         return cubes_targets_pairs
 
@@ -247,10 +230,10 @@ class CubeRow:
         approach_point = Point(pick_pose.position.x, pick_pose.position.y, pick_pose.position.z+0.15)
         # Nicht mit dem Greifer in den Wuerfel fahren, sondern 5cm darueber, damit er zwischen den Greiferbacken ist.
         grasp_point = Point(pick_pose.position.x, pick_pose.position.y, pick_pose.position.z+0.05)
-        # Bewegungen zu einer Sequenz zusammenfassen
-        #Zuerst: PTP zu Position direkt ueber den Wuerfel
         try:
+            # compress motion to sequence
             sequence = Sequence()
+            # PTP motion to cube
             sequence.append(
                 Ptp(
                     goal=Pose
@@ -263,9 +246,7 @@ class CubeRow:
                 ),
                 blend_radius=BLEND_RADIUS
             )
-            # Greifer oeffnen
-            # self.gripper.open()
-            #LIN zum Wuerfel
+            # LIN to pick up cube
             sequence.append(
                 Lin(
                     goal=Pose(
@@ -277,9 +258,8 @@ class CubeRow:
                 )
             )
             robot.move(sequence)
-            #Greifer schliessen
             self.gripper.close()
-            #mit LIN gerade nach oben anheben
+            # lift cube with LIN
             robot.move(
                 Lin(
                     goal=Pose(
@@ -293,13 +273,12 @@ class CubeRow:
         except RobotMoveFailed as e:
             rospy.loginfo(e)
 
-    #Ablegen eines Wuerfels, der sich schon im Greifer befinden muss, an der gegebenen Position
     def place_cube(self, robot, target_pose):
         approach_point = Point(target_pose.position.x, target_pose.position.y, target_pose.position.z+0.15)
         place_point = Point(target_pose.position.x, target_pose.position.y, target_pose.position.z+0.05)
         try:
             sequence = Sequence()
-            #PTP ueber die Ablageposition. blend_radius: Ueberschleifen
+            # PTP to cube location
             sequence.append(
                 Ptp(
                     goal=Pose(
@@ -311,7 +290,7 @@ class CubeRow:
                 ),
                 blend_radius=BLEND_RADIUS
             )
-            #LIN Gerade nach unten
+            # LIN to place cube
             sequence.append(
                 Lin(
                     goal=Pose(
@@ -322,11 +301,9 @@ class CubeRow:
                     acc_scale=LIN_ACCELERATION,
                 )
             )
-            #Ausfuehren der Sequenz
             robot.move(sequence)
-            #Greifer oeffnen
             self.gripper.open()
-            #Nach dem Ablegen wieder gerade nach oben fahren
+            # TCP moves straight up
             robot.move(
                 Lin(
                     goal=Pose
