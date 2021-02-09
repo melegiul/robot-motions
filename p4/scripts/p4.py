@@ -15,25 +15,39 @@ WORLD_FRAME = "/world"
 FIRST_CUBE_FRAME = "/first_cube"
 
 TABLE_FRAME = "/table" #Vordere Ecke der Ablageflaeche
-N_CUBES = 1 #Hoehe der Tuerme, 0-4
+#Hoehe der Tuerme, 0-4
+N_CUBES = 0
 
 START_CUBE_DISTANCE = 0.1
-TABLE_CUBE_DISTANCE = 0.1
-START_TOWER_X = 0
-END_TOWER_X = 2 * TABLE_CUBE_DISTANCE
-CUBE_COL_NUM = 3
-TABLE_OFFSET_X = 0.1
-TABLE_OFFSET_Y = 0.1
+CUBE_COL_n = 2
+
+TABLE_CUBE_HEIGHT = 0.05
+TABLE_CUBE_DISTANCE = 0.08
+TABLE_OFFSET_X = 0.18
+TABLE_OFFSET_Y = 0.08
+
 OFFSET = 3
+START_TOWER_X = TABLE_OFFSET_X
+MID_TOWER_X = TABLE_OFFSET_X + TABLE_CUBE_DISTANCE
+END_TOWER_X = TABLE_OFFSET_X + 2 * TABLE_CUBE_DISTANCE
+
 UPSIDE_DOWN=from_euler(0, math.radians(180), 0)
+DEFAULT=from_euler(0,0,0)
+
 LIN_VELOCITY = 0.3
 LIN_ACCELERATION = 0.3
 PTP_VELOCITY = 0.7
 PTP_ACCELERATION = 0.4
-BLEND_RADIUS = 0.03
+BLEND_RADIUS = 0
 HOME_BLEND_RADIUS = 0.01
 HOME_PTP_VELOCITY = 0.7
 HOME_PTP_ACCELERATION = 0.3
+
+APPROACH_HEIGHT = 0.08
+
+SOURCE = {'pose': Pose(position=Point(START_TOWER_X, TABLE_OFFSET_Y, 0), orientation=UPSIDE_DOWN), 'height': N_CUBES}
+AUXILIARY = {'pose': Pose(position=Point(MID_TOWER_X, TABLE_OFFSET_Y, 0), orientation=UPSIDE_DOWN), 'height': 0}
+DESTINATION = {'pose': Pose(position=Point(END_TOWER_X, TABLE_OFFSET_Y, 0), orientation=UPSIDE_DOWN), 'height': 0}
 
 class Hanoi:
     def __init__(self, robot):
@@ -113,8 +127,8 @@ class Hanoi:
         """
         cube_pose = Pose(
             position=Point(
-                0 + (cube_id / CUBE_COL_NUM * START_CUBE_DISTANCE),
-                0 + (cube_id % CUBE_COL_NUM * START_CUBE_DISTANCE),
+                0 + (cube_id / CUBE_COL_n * START_CUBE_DISTANCE),
+                0 + (cube_id % CUBE_COL_n * START_CUBE_DISTANCE),
                 0
             )
         )
@@ -180,9 +194,9 @@ class Hanoi:
         """
         target_pose = Pose(
             position=Point(
-                0 + TABLE_OFFSET_X + x_offset,
+                0 + x_offset,
                 0 + TABLE_OFFSET_Y,
-                0 + (cube_id * TABLE_CUBE_DISTANCE)
+                0 + (cube_id * TABLE_CUBE_HEIGHT)
             )
         )
         pose_orientation = from_euler(0, 0, 0)
@@ -208,7 +222,7 @@ class Hanoi:
         return target_pose
 
 
-    def get_cube(self, robot, pick_pose, frame, to_home=True):
+    def get_cube(self, robot, pick_pose, frame, to_home=True, height=0, operation_height=0):
         """[summary]
 
         Args:
@@ -217,50 +231,15 @@ class Hanoi:
             frame ([type]): [description]
             to_home (bool, optional): [description]. Defaults to True.
         """
-        approach_point = Point(pick_pose.position.x, pick_pose.position.y, pick_pose.position.z+0.15)
+        if operation_height != 0:
+            approach_height = operation_height
+        else:
+            approach_height = pick_pose.position.z+APPROACH_HEIGHT+height*TABLE_CUBE_HEIGHT
+        approach_point = Point(pick_pose.position.x, pick_pose.position.y, approach_height)
         # Nicht mit dem Greifer in den Wuerfel fahren, sondern 5cm darueber, damit er zwischen den Greiferbacken ist.
-        grasp_point = Point(pick_pose.position.x, pick_pose.position.y, pick_pose.position.z+0.05)
+        grasp_point = Point(pick_pose.position.x, pick_pose.position.y, pick_pose.position.z+0.05+height*TABLE_CUBE_HEIGHT)
         try:
-            # compress motion to sequence
-            sequence = Sequence()
-            if to_home:
-                # PTP motion to home
-                sequence.append(
-                    Ptp(
-                        goal=HOME_POSITION,
-                        vel_scale=HOME_PTP_VELOCITY,
-                        acc_scale=HOME_PTP_ACCELERATION,
-                        reference_frame=WORLD_FRAME.strip('/')
-                    ),
-                    blend_radius=BLEND_RADIUS
-                )
-            # PTP motion to cube
-            sequence.append(
-                Ptp(
-                    goal=Pose
-                    (
-                        position=approach_point,
-                        orientation=pick_pose.orientation
-                    ),
-                    vel_scale=PTP_VELOCITY,
-                    acc_scale=PTP_ACCELERATION,
-                    reference_frame=frame
-                ),
-                blend_radius=BLEND_RADIUS
-            )
-            # LIN to pick up cube
-            sequence.append(
-                Lin(
-                    goal=Pose(
-                        position=grasp_point,
-                        orientation=pick_pose.orientation
-                    ),
-                    vel_scale=LIN_VELOCITY,
-                    acc_scale=LIN_ACCELERATION,
-                    reference_frame=frame
-                )
-            )
-            robot.move(sequence)
+            self.approach_cube(robot, pick_pose, approach_point, grasp_point, frame, to_home)
             self.gripper.close()
             # lift cube with LIN
             robot.move(
@@ -278,7 +257,88 @@ class Hanoi:
             rospy.loginfo(e)
 
 
-    def place_cube(self, robot, target_pose, frame, to_home=True):
+    def approach_cube(self, robot, pick_pose, approach_point, grasp_point, frame, to_home):
+        """[summary]
+
+        Args:
+            robot ([type]): [description]
+            pick_pose ([type]): [description]
+            frame ([type]): [description]
+        """
+        try:
+            current_pose = robot.get_current_pose(base=frame)
+            current_position = Point(
+                round(current_pose.position.x, 2),
+                round(current_pose.position.y, 2),
+                round(current_pose.position.z, 2)
+            )
+            approach_point = Point(
+                round(approach_point.x, 2),
+                round(approach_point.y, 2),
+                round(approach_point.z, 2)
+            )
+            if (
+                current_position.x != approach_point.x
+                or current_position.y != approach_point.y
+                or current_position.z != approach_point.z
+            ):
+                sequence = Sequence()
+                if to_home:
+                    # PTP motion to home
+                    sequence.append(
+                        Ptp(
+                            goal=HOME_POSITION,
+                            vel_scale=HOME_PTP_VELOCITY,
+                            acc_scale=HOME_PTP_ACCELERATION,
+                            reference_frame=WORLD_FRAME.strip('/')
+                        ),
+                        blend_radius=BLEND_RADIUS
+                    )
+                # PTP motion to cube
+                sequence.append(
+                    Ptp(
+                        goal=Pose
+                        (
+                            position=approach_point,
+                            orientation=pick_pose.orientation
+                        ),
+                        vel_scale=PTP_VELOCITY,
+                        acc_scale=PTP_ACCELERATION,
+                        reference_frame=frame
+                    ),
+                    blend_radius=BLEND_RADIUS
+                )
+                # LIN to pick up cube
+                sequence.append(
+                    Lin(
+                        goal=Pose(
+                            position=grasp_point,
+                            orientation=pick_pose.orientation
+                        ),
+                        vel_scale=LIN_VELOCITY,
+                        acc_scale=LIN_ACCELERATION,
+                        reference_frame=frame
+                    )
+                )
+                robot.move(sequence)
+            else:
+                # LIN to pick up cube
+                robot.move(
+                    Lin(
+                        goal=Pose(
+                            position=grasp_point,
+                            orientation=pick_pose.orientation
+                        ),
+                        vel_scale=LIN_VELOCITY,
+                        acc_scale=LIN_ACCELERATION,
+                        reference_frame=frame
+                    )
+                )
+        except RobotMoveFailed as e:
+            rospy.loginfo(e)
+
+
+    def place_cube(self, robot, target_pose, frame, to_home=True, height=0, operation_height=0):
         """[summary]
 
         Args:
@@ -287,8 +347,12 @@ class Hanoi:
             frame ([type]): [description]
             to_home (bool, optional): [description]. Defaults to True.
         """
-        approach_point = Point(target_pose.position.x, target_pose.position.y, target_pose.position.z+0.15)
-        place_point = Point(target_pose.position.x, target_pose.position.y, target_pose.position.z+0.05)
+        if operation_height != 0:
+            approach_height = operation_height
+        else:
+            approach_height = target_pose.position.z+APPROACH_HEIGHT+height*TABLE_CUBE_HEIGHT
+        approach_point = Point(target_pose.position.x, target_pose.position.y, approach_height)
+        place_point = Point(target_pose.position.x, target_pose.position.y, target_pose.position.z+0.05+height*TABLE_CUBE_HEIGHT)
         try:
             sequence = Sequence()
             if to_home:
@@ -346,69 +410,28 @@ class Hanoi:
             rospy.loginfo(e)
 
 
-    def lift_cube(self, robot, pick_pose, frame):
-        """[summary]
-
-        Args:
-            robot ([type]): [description]
-            pick_pose ([type]): [description]
-            frame ([type]): [description]
-        """
-        approach_point = Point(pick_pose.position.x, pick_pose.position.y, pick_pose.position.z+0.15)
-        # Nicht mit dem Greifer in den Wuerfel fahren, sondern 5cm darueber, damit er zwischen den Greiferbacken ist.
-        grasp_point = Point(pick_pose.position.x, pick_pose.position.y, pick_pose.position.z+0.05)
-        try:
-            # LIN to pick up cube
-            robot.move(
-                Lin(
-                    goal=Pose(
-                        position=grasp_point,
-                        orientation=pick_pose.orientation
-                    ),
-                    vel_scale=LIN_VELOCITY,
-                    acc_scale=LIN_ACCELERATION,
-                    reference_frame=frame
-                )
-            )
-            self.gripper.close()
-            # lift cube with LIN
-            robot.move(
-                Lin(
-                    goal=Pose(
-                        position=approach_point,
-                        orientation=pick_pose.orientation
-                    ),
-                    vel_scale=LIN_VELOCITY,
-                    acc_scale=LIN_ACCELERATION,
-                    reference_frame=frame
-                )
-            )
-        except RobotMoveFailed as e:
-            rospy.loginfo(e)
 
 
-    def hanoi(self, robot, start_tower, end_tower):
-        """[summary]
-
-        Args:
-            robot ([type]): [description]
-            start_tower ([type]): [description]
-            end_tower ([type]): [description]
-        """
-        self.lift_cube(robot, start_tower[N_CUBES - 1], TABLE_FRAME.strip('/'))
-        if N_CUBES == 1:
-            self.place_cube(robot, end_tower[N_CUBES - 1], TABLE_FRAME.strip('/'), False)
-        elif N_CUBES == 2:
-            mid_tower_pose = Pose(
-                position=Point(
-                    start_tower[0].position.x + 0.1,
-                    start_tower[0].position.y,
-                    start_tower[0].position.z
-                ),
-                orientation=start_tower[0].orientation
-            )
-            self.place_cube(robot, mid_tower_pose, TABLE_FRAME.strip('/'), False)
-            
+    def tower_of_hanoi(self, robot, n, source, destination, auxiliary):
+        operation_height = (N_CUBES - 1) * TABLE_CUBE_HEIGHT + APPROACH_HEIGHT
+        if n == 1:
+            # move disk 1 from source to destination
+            # max_height = max([source['height'], destination['height'], auxiliary['height']])
+            # operation_height = APPROACH_HEIGHT + (max_height) * TABLE_CUBE_HEIGHT
+            self.get_cube(robot, source['pose'], TABLE_FRAME.strip('/'), False, source['height']-1, operation_height)
+            self.place_cube(robot, destination['pose'], TABLE_FRAME.strip('/'), False, destination['height'], operation_height)
+            source['height'] -= 1
+            destination['height'] += 1
+            return
+        self.tower_of_hanoi(robot, n-1, source, auxiliary, destination)
+        # move disk n from source to destination
+        # max_height = max([source['height'], destination['height'], auxiliary['height']])
+        # operation_height = APPROACH_HEIGHT + (max_height - 1) * TABLE_CUBE_HEIGHT
+        self.get_cube(robot, source['pose'], TABLE_FRAME.strip('/'), False, source['height']-1, operation_height)
+        self.place_cube(robot, destination['pose'], TABLE_FRAME.strip('/'), False, destination['height'], operation_height)
+        source['height'] -= 1
+        destination['height'] += 1
+        self.tower_of_hanoi(robot, n-1, auxiliary, destination, source)
 
 
     def main(self):
@@ -423,14 +446,15 @@ class Hanoi:
                 to_home = False
             self.get_cube(robot, cube_depot[n], FIRST_CUBE_FRAME.strip('/'), to_home)
             self.place_cube(robot, start_tower[n], TABLE_FRAME.strip('/'))
-        self.hanoi(robot, start_tower, end_tower)
+        # import pdb; pdb.set_trace()
+        if N_CUBES != 0:
+            self.tower_of_hanoi(robot, N_CUBES, SOURCE, DESTINATION, AUXILIARY)
         for m in range(N_CUBES):
             # reset cubes positions
             to_home = True
             if m == 0:
-                self.lift_cube(robot, end_tower[N_CUBES - 1 - m], TABLE_FRAME.strip('/'))
-            else:
-                self.get_cube(robot, end_tower[N_CUBES - 1 - m], TABLE_FRAME.strip('/'), to_home)
+                to_home = False
+            self.get_cube(robot, end_tower[N_CUBES - 1 - m], TABLE_FRAME.strip('/'), to_home)
             self.place_cube(robot, cube_depot[N_CUBES - 1 - m], FIRST_CUBE_FRAME.strip('/'))
         self.home(robot)
 
