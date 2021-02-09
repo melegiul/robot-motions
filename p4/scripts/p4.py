@@ -16,38 +16,40 @@ FIRST_CUBE_FRAME = "/first_cube"
 
 TABLE_FRAME = "/table" #Vordere Ecke der Ablageflaeche
 #Hoehe der Tuerme, 0-4
-N_CUBES = 0
+N_CUBES = 4
+TOTAL_CUBES = 6
 
+# cube depot settings
 START_CUBE_DISTANCE = 0.1
-CUBE_COL_n = 2
+CUBE_COL_NUM = 2
 
+# table and tower settings
 TABLE_CUBE_HEIGHT = 0.05
 TABLE_CUBE_DISTANCE = 0.08
 TABLE_OFFSET_X = 0.18
 TABLE_OFFSET_Y = 0.08
-
-OFFSET = 3
 START_TOWER_X = TABLE_OFFSET_X
 MID_TOWER_X = TABLE_OFFSET_X + TABLE_CUBE_DISTANCE
 END_TOWER_X = TABLE_OFFSET_X + 2 * TABLE_CUBE_DISTANCE
 
-UPSIDE_DOWN=from_euler(0, math.radians(180), 0)
-DEFAULT=from_euler(0,0,0)
-
+# settings about velocity and acceleration
 LIN_VELOCITY = 0.3
 LIN_ACCELERATION = 0.3
 PTP_VELOCITY = 0.7
 PTP_ACCELERATION = 0.4
-BLEND_RADIUS = 0
-HOME_BLEND_RADIUS = 0.01
+BLEND_RADIUS = 0.01
 HOME_PTP_VELOCITY = 0.7
-HOME_PTP_ACCELERATION = 0.3
+HOME_PTP_ACCELERATION = 0.4
+HOME_BLEND_RADIUS = 0
 
+# genral picking and placing
+UPSIDE_DOWN=from_euler(0, math.radians(180), 0)
 APPROACH_HEIGHT = 0.08
 
-SOURCE = {'pose': Pose(position=Point(START_TOWER_X, TABLE_OFFSET_Y, 0), orientation=UPSIDE_DOWN), 'height': N_CUBES}
-AUXILIARY = {'pose': Pose(position=Point(MID_TOWER_X, TABLE_OFFSET_Y, 0), orientation=UPSIDE_DOWN), 'height': 0}
-DESTINATION = {'pose': Pose(position=Point(END_TOWER_X, TABLE_OFFSET_Y, 0), orientation=UPSIDE_DOWN), 'height': 0}
+# tower states after table setup
+SOURCE = Pose(position=Point(START_TOWER_X, TABLE_OFFSET_Y, TABLE_CUBE_HEIGHT * N_CUBES), orientation=UPSIDE_DOWN)
+AUXILIARY = Pose(position=Point(MID_TOWER_X, TABLE_OFFSET_Y, 0), orientation=UPSIDE_DOWN)
+DESTINATION = Pose(position=Point(END_TOWER_X, TABLE_OFFSET_Y, 0), orientation=UPSIDE_DOWN)
 
 class Hanoi:
     def __init__(self, robot):
@@ -88,6 +90,8 @@ class Hanoi:
 
     def home(self, robot):
         """Return robot to home position
+        pre: no obstacles on route to home position
+        post: home position reached
 
         Args:
             robot (pilz_robot_programming.Robot): robot to move
@@ -105,16 +109,16 @@ class Hanoi:
 
 
     def get_cube_poses(self):
-        """get cube poses
+        """get all cube poses in the range of N_CUBES
 
         Returns:
-            list: list of cube poseS
+            list: list of cube poses
         """
         return [self.get_cube_pose(cube_id) for cube_id in range(N_CUBES)]
 
 
     def get_cube_pose(self, cube_id):
-        """Set cube pose according to first cube and cube distances
+        """get cube pose depending on first cubes position and cube distances/formation
 
         Additionally turn round z-axis orientation by quaternion multiplication
         as preparation for setting TCP pose
@@ -127,8 +131,8 @@ class Hanoi:
         """
         cube_pose = Pose(
             position=Point(
-                0 + (cube_id / CUBE_COL_n * START_CUBE_DISTANCE),
-                0 + (cube_id % CUBE_COL_n * START_CUBE_DISTANCE),
+                0 + (cube_id / CUBE_COL_NUM * START_CUBE_DISTANCE),
+                0 + (cube_id % CUBE_COL_NUM * START_CUBE_DISTANCE),
                 0
             )
         )
@@ -171,26 +175,26 @@ class Hanoi:
 
     
     def get_table_poses(self, x_offset):
-        """[summary]
+        """depending on x_offset this funtion returns either cube formation for start or end tower
 
         Args:
-            cube_id ([type]): [description]
+            x_offset (float): x-coordinate of start or end tower
 
         Returns:
-            [type]: [description]
+            list: list of all tower poses
         """
         return [self.get_table_pose(cube_id, x_offset) for cube_id in range(N_CUBES)]
 
 
     def get_table_pose(self, cube_id, x_offset):
-        """get table pose
+        """get single cube pose for either start or end tower depending on x_offset
 
         Args:
-            cube_id ([type]): [description]
-            x_offset ([type]): [description]
+            cube_id (integer): cubes id to get the tower pose
+            x_offset (float): either start or end tower coordinate
 
         Returns:
-            [type]: [description]
+            geometry_msgs.msg.Pose: a single cubes tower pose
         """
         target_pose = Pose(
             position=Point(
@@ -222,22 +226,25 @@ class Hanoi:
         return target_pose
 
 
-    def get_cube(self, robot, pick_pose, frame, to_home=True, height=0, operation_height=0):
-        """[summary]
+    def get_cube(self, robot, pick_pose, frame, to_home=True, operation_height=0):
+        """move gripper above cube position and pick cube up
+        pre: cubes pose is in robots range
+        post: cube is lifted by gripper
 
         Args:
-            robot ([type]): [description]
-            pick_pose ([type]): [description]
-            frame ([type]): [description]
-            to_home (bool, optional): [description]. Defaults to True.
+            robot (pilz_robot_programming.Robot): robot to move
+            pick_pose (geometry_msgs.msg.Pose): pose of cube to pick up
+            frame (string): target frame
+            to_home (bool, optional): whether to set home as inermediate or not. Defaults to True.
+            operation_height (int, optional): fixed approach hight independent from cube pose. Defaults to 0.
         """
         if operation_height != 0:
             approach_height = operation_height
         else:
-            approach_height = pick_pose.position.z+APPROACH_HEIGHT+height*TABLE_CUBE_HEIGHT
+            approach_height = pick_pose.position.z + APPROACH_HEIGHT
         approach_point = Point(pick_pose.position.x, pick_pose.position.y, approach_height)
         # Nicht mit dem Greifer in den Wuerfel fahren, sondern 5cm darueber, damit er zwischen den Greiferbacken ist.
-        grasp_point = Point(pick_pose.position.x, pick_pose.position.y, pick_pose.position.z+0.05+height*TABLE_CUBE_HEIGHT)
+        grasp_point = Point(pick_pose.position.x, pick_pose.position.y, pick_pose.position.z + 0.05)
         try:
             self.approach_cube(robot, pick_pose, approach_point, grasp_point, frame, to_home)
             self.gripper.close()
@@ -258,12 +265,17 @@ class Hanoi:
 
 
     def approach_cube(self, robot, pick_pose, approach_point, grasp_point, frame, to_home):
-        """[summary]
+        """approach cube depending on current TCP position
+        pre: approach point is in robots range
+        post: cube is fixed by gripper
 
         Args:
-            robot ([type]): [description]
-            pick_pose ([type]): [description]
-            frame ([type]): [description]
+            robot (pilz_robot_programming.Robot): robot to move
+            pick_pose (geometry_msgs.msg.Pose): pose of cube to pick up
+            approach_point (geometry_msgs.msg.Position): point above cube
+            grasp_point (geometry_msgs.msg.Position): point for gripping cube
+            frame (string): target frame
+            to_home (bool, optional): whether to set home as inermediate or not. Defaults to True.
         """
         try:
             current_pose = robot.get_current_pose(base=frame)
@@ -282,8 +294,10 @@ class Hanoi:
                 or current_position.y != approach_point.y
                 or current_position.z != approach_point.z
             ):
+            # if TCP is not right above cube
                 sequence = Sequence()
                 if to_home:
+                    # if there are obstacles between TCP and cube position
                     # PTP motion to home
                     sequence.append(
                         Ptp(
@@ -292,7 +306,7 @@ class Hanoi:
                             acc_scale=HOME_PTP_ACCELERATION,
                             reference_frame=WORLD_FRAME.strip('/')
                         ),
-                        blend_radius=BLEND_RADIUS
+                        blend_radius=HOME_BLEND_RADIUS
                     )
                 # PTP motion to cube
                 sequence.append(
@@ -338,24 +352,29 @@ class Hanoi:
             rospy.loginfo(e)
 
 
-    def place_cube(self, robot, target_pose, frame, to_home=True, height=0, operation_height=0):
-        """[summary]
+    def place_cube(self, robot, target_pose, frame, to_home=True, operation_height=0):
+        """place cube at target avoiding obstacles
+        pre: gripper contains cube
+        post: cube set on right place
 
         Args:
-            robot ([type]): [description]
-            target_pose ([type]): [description]
-            frame ([type]): [description]
-            to_home (bool, optional): [description]. Defaults to True.
+            robot (pilz_robot_programming.Robot): robot to move
+            target_pose (geometry_msgs.msg.Pose): cubes target pose
+            frame (string): target frame
+            to_home (bool, optional): whether to set home as inermediate or not. Defaults to True.
+            operation_height (int, optional): fixed approach hight independent from cube pose. Defaults to 0.
         """
         if operation_height != 0:
+            # if fixed approach hight is set
             approach_height = operation_height
         else:
-            approach_height = target_pose.position.z+APPROACH_HEIGHT+height*TABLE_CUBE_HEIGHT
+            approach_height = target_pose.position.z + APPROACH_HEIGHT
         approach_point = Point(target_pose.position.x, target_pose.position.y, approach_height)
-        place_point = Point(target_pose.position.x, target_pose.position.y, target_pose.position.z+0.05+height*TABLE_CUBE_HEIGHT)
+        place_point = Point(target_pose.position.x, target_pose.position.y, target_pose.position.z + 0.05)
         try:
             sequence = Sequence()
             if to_home:
+                # if there are obstacles between TCP and cube position
                 # PTP motion to home
                 sequence.append(
                     Ptp(
@@ -364,7 +383,7 @@ class Hanoi:
                         acc_scale=HOME_PTP_ACCELERATION,
                         reference_frame=WORLD_FRAME.strip('/')
                     ),
-                    blend_radius=BLEND_RADIUS
+                    blend_radius=HOME_BLEND_RADIUS
                 )
             # PTP to cube location
             sequence.append(
@@ -413,28 +432,36 @@ class Hanoi:
 
 
     def tower_of_hanoi(self, robot, n, source, destination, auxiliary):
+        """moves cubes from source to destination tower according to "Tower of Hanoi" rules
+        pre: source tower was build correctly
+        post: moved tower from source to destination
+
+        Args:
+            robot (pilz_robot_programming.Robot): robot to move
+            n (integer): number of remaining cubes
+            source (geometry_msgs.msg.Pose): top level cubes pose of source tower
+            destination (geometry_msgs.msg.Pose): top level cubes pose of mid tower
+            auxiliary (geometry_msgs.msg.Pose): top level cubes pose of destination tower
+        """
         operation_height = (N_CUBES - 1) * TABLE_CUBE_HEIGHT + APPROACH_HEIGHT
         if n == 1:
-            # move disk 1 from source to destination
-            # max_height = max([source['height'], destination['height'], auxiliary['height']])
-            # operation_height = APPROACH_HEIGHT + (max_height) * TABLE_CUBE_HEIGHT
-            self.get_cube(robot, source['pose'], TABLE_FRAME.strip('/'), False, source['height']-1, operation_height)
-            self.place_cube(robot, destination['pose'], TABLE_FRAME.strip('/'), False, destination['height'], operation_height)
-            source['height'] -= 1
-            destination['height'] += 1
+            source.position.z -= TABLE_CUBE_HEIGHT
+            self.get_cube(robot, source, TABLE_FRAME.strip('/'), False, operation_height)
+            self.place_cube(robot, destination, TABLE_FRAME.strip('/'), False, operation_height)
+            destination.position.z += TABLE_CUBE_HEIGHT
             return
         self.tower_of_hanoi(robot, n-1, source, auxiliary, destination)
-        # move disk n from source to destination
-        # max_height = max([source['height'], destination['height'], auxiliary['height']])
-        # operation_height = APPROACH_HEIGHT + (max_height - 1) * TABLE_CUBE_HEIGHT
-        self.get_cube(robot, source['pose'], TABLE_FRAME.strip('/'), False, source['height']-1, operation_height)
-        self.place_cube(robot, destination['pose'], TABLE_FRAME.strip('/'), False, destination['height'], operation_height)
-        source['height'] -= 1
-        destination['height'] += 1
+        source.position.z -= TABLE_CUBE_HEIGHT
+        self.get_cube(robot, source, TABLE_FRAME.strip('/'), False, operation_height)
+        self.place_cube(robot, destination, TABLE_FRAME.strip('/'), False, operation_height)
+        destination.position.z += TABLE_CUBE_HEIGHT
         self.tower_of_hanoi(robot, n-1, auxiliary, destination, source)
 
 
     def main(self):
+        """
+        set up tables cubes for "Tower of Hanoi" and clears table
+        """
         cube_depot = self.get_cube_poses()
         start_tower = self.get_table_poses(START_TOWER_X)
         end_tower = self.get_table_poses(END_TOWER_X)
@@ -446,7 +473,6 @@ class Hanoi:
                 to_home = False
             self.get_cube(robot, cube_depot[n], FIRST_CUBE_FRAME.strip('/'), to_home)
             self.place_cube(robot, start_tower[n], TABLE_FRAME.strip('/'))
-        # import pdb; pdb.set_trace()
         if N_CUBES != 0:
             self.tower_of_hanoi(robot, N_CUBES, SOURCE, DESTINATION, AUXILIARY)
         for m in range(N_CUBES):
